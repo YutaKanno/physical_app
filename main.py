@@ -3,6 +3,21 @@ import streamlit as st
 import plotly.express as px
 import statsmodels.api as sm
 import sqlite3
+from io import BytesIO
+import plotly.io as pio
+from streamlit.runtime.scriptrunner import RerunException
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+import tempfile
+from reportlab.lib.pagesizes import landscape, letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
+import tempfile
+from io import BytesIO
+from PIL import Image, ImageDraw
+
+import requests
+from bs4 import BeautifulSoup
 
 st.set_page_config(
         page_title="My Streamlit App",
@@ -19,10 +34,140 @@ conn = sqlite3.connect('physical_rawdata.db')
 rawdata_original = pd.read_sql_query("SELECT * FROM physical_rawdata", conn)
 conn.close()
 
+
+
+
+
+
+
+def get_fig_as_image(fig):
+    img_bytes = fig.to_image(format="png")  # 画像をバイナリデータで取得
+    return BytesIO(img_bytes)  # バイナリデータをBytesIOでラップ
+# 画像サイズ取得
+def get_image_dimensions(image_path):
+    with Image.open(image_path) as img:
+        return img.size  # (width, height)
+
+
+
+def get_first_image_url(name):
+    # Google画像検索のURLを作成
+    query = name.replace(' ', '+')
+    url = f"https://www.google.com/search?tbm=isch&q={query}"
+
+    # User-Agentを偽装しないとブロックされる
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+
+    # リクエスト送信
+    response = requests.get(url, headers=headers)
+
+    # ページ解析
+    soup = BeautifulSoup(response.text, "html.parser")
+    img_tags = soup.find_all("img")
+
+    # 最初の画像のURLを取得（通常、1つ目はGoogleロゴなので2つ目を使う）
+    if len(img_tags) > 1:
+        return img_tags[1]["src"]
+    else:
+        return "画像が見つかりませんでした。"
+    
+# グラフをPDFに保存する関数
+def save_plots_to_pdf(figlist, name, ja_name):
+    pdf_output = BytesIO()
+    c = canvas.Canvas(pdf_output, pagesize=letter)
+    width, height = letter
+
+    for i in range(0, len(figlist), 2):
+        # ヘッダー（タイトル）
+        c.setFont("Helvetica-Bold", 30)
+        c.drawCentredString(width / 2, height - 70, name)
+
+        # ヘッダー（ロゴ画像）
+        logo_path = "TsukubaLogo.png"
+        logo = ImageReader(logo_path)
+        logo_width = 50
+        logo_height = 50
+        c.drawImage(logo, 40, height - logo_height - 35, width=logo_width, height=logo_height, mask='auto')
+    
+        url = get_first_image_url(ja_name)
+        response = requests.get(url, stream=True)
+        if response.status_code == 200:
+            img = Image.open(BytesIO(response.content)).convert("RGBA")
+            width2, height2 = img.size
+            size = min(width2, height2)
+
+            # 中心を基準にした円形マスク
+            left = (width2 - size) // 2
+            top = (height2 - size) // 2
+            right = left + size
+            bottom = top + size
+
+            mask = Image.new("L", (size, size), 0)
+            draw = ImageDraw.Draw(mask)
+            draw.ellipse((0, 0, size, size), fill=255)
+
+            cropped_img = img.crop((left, top, right, bottom))
+            cropped_img.putalpha(mask)
+
+            # 一時ファイルに保存
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile:
+                cropped_img.save(tmpfile.name, format="PNG")
+                top_img_path = tmpfile.name
+
+                # PDFの右上に画像を配置
+                top_img_width, top_img_height = get_image_dimensions(top_img_path)
+                ratio = 50 / top_img_width  # 50pxにリサイズ
+                new_width = top_img_width * ratio
+                new_height = top_img_height * ratio
+                c.drawImage(top_img_path, 500, height - 85, width=new_width, height=new_height, mask='auto')
+            
+            
+        # 最初のグラフ
+        img_stream_1 = get_fig_as_image(figlist[i])
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile_1:
+            tmpfile_1.write(img_stream_1.getvalue())
+            tmpfile_1.close()
+
+            # サイズ調整
+            img_width, img_height = get_image_dimensions(tmpfile_1.name)
+            ratio = (width * 0.8) / img_width
+            new_width = width * 0.8
+            new_height = img_height * ratio
+            x = (width - new_width) / 2
+            c.drawImage(tmpfile_1.name, x, height // 2.3, width=new_width, height=new_height)
+
+        # 2番目のグラフ
+        if i + 1 < len(figlist):
+            img_stream_2 = get_fig_as_image(figlist[i + 1])
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmpfile_2:
+                tmpfile_2.write(img_stream_2.getvalue())
+                tmpfile_2.close()
+
+                img_width, img_height = get_image_dimensions(tmpfile_2.name)
+                ratio = (width * 0.8) / img_width
+                new_width = width * 0.8
+                new_height = img_height * ratio
+                x = (width - new_width) / 2
+                c.drawImage(tmpfile_2.name, x, 30, width=new_width, height=new_height)
+
+        c.showPage()
+
+    c.save()
+    pdf_output.seek(0)
+    return pdf_output
+    
+
+        
 # タブを作成
 tab1, tab2, tab3 = st.tabs(["グラフ", "ID入力", "テストデータ入力"])
 
 with tab1:
+    # セッションステートの初期化
+    if 'additional_count' not in st.session_state:
+        st.session_state.additional_count = 0
+        
     if st.button("データを更新"):
         conn = sqlite3.connect('physical_rawdata.db')
         rawdata_original = pd.read_sql_query("SELECT * FROM physical_rawdata", conn)
@@ -35,52 +180,107 @@ with tab1:
     rawdata = rawdata_original.merge(id_list_unique[['ID', '名前']], on='ID', how='left')
     # データを表示
     st.write(rawdata)
-
-
+    
     
 
     st.title("Plot Physical Data")
-
+        
     # 名前とTest Itemの選択
     names = rawdata['名前'].unique()
     test_items = rawdata['Test Item'].unique()
 
-    selected_test = st.selectbox("Test種目を選択", test_items)
     selected_name = st.selectbox("名前を選択", names)
+    selected_eng_name = id_list.loc[id_list['名前'] == selected_name, 'Name'].values[0]
+    selected_test = st.selectbox("Test種目を選択", test_items)
 
     # フィルタリング
     filtered = rawdata[
         (rawdata['名前'] == selected_name) &
         (rawdata['Test Item'] == selected_test)
     ]
+    
+    
+    
+    def plot_trendline(rawdata, selected_name, n, additional_test):
+        filtered = rawdata[
+            (rawdata['名前'] == selected_name) &
+            (rawdata['Test Item'] == additional_test)
+        ]
+
+        if filtered.empty:
+            st.warning(f"該当データがありません ({n})")
+        else:
+            filtered = filtered.sort_values(by='date')
+            X = pd.to_datetime(filtered['date']).map(pd.Timestamp.toordinal)
+            X = sm.add_constant(X)
+            y = filtered['Result']
+
+            model = sm.OLS(y, X)
+            results = model.fit()
+            filtered['trendline'] = results.predict(X)
+
+            fig = px.line(
+                filtered, x='date', y='Result', markers=True,
+                title=f"{selected_name} の {additional_test} の推移",
+                labels={"date": "日付", "Result": "結果"}
+            )
+            fig.add_scatter(
+                x=filtered['date'], y=filtered['trendline'],
+                mode='lines', name='回帰直線',
+                line=dict(color='orange', dash='dot')
+            )
+
+            st.plotly_chart(fig, use_container_width=True, key=f"chart_{n}")
+            return fig  # 追加：生成したfigを返す
+
+
+
 
 
     if filtered.empty:
         st.warning("該当データがありません")
     else:
-        filtered = filtered.sort_values(by='date') 
-        X = pd.to_datetime(filtered['date']).map(pd.Timestamp.toordinal)  # 日付を数値に変換
-        X = sm.add_constant(X)  # 定数項（切片）を追加
-        y = filtered['Result']
+        # 最初のグラフ（メインのテスト種目）
+        fig = plot_trendline(rawdata, selected_name, 0, selected_test)
+        figlist = [fig]  
+        
+     # 追加グラフ描画ループ
+    for i in range(st.session_state.additional_count):
+        selected = st.selectbox(
+            f"追加テスト種目 {i+1}", test_items,
+            key=f"additional_test_{i}"
+        )
+        fig = plot_trendline(rawdata, selected_name, i+1, selected)
+        figlist.append(fig)  
+        
 
-        # 回帰モデルを作成
-        model = sm.OLS(y, X)
-        results = model.fit()
+    # グラフ追加ボタン（ページの一番下にくる）
+    if st.button("グラフを追加"):
+        st.session_state.additional_count += 1
+        st.rerun()
+    
+    
+        
+    # 出力先パスを入力するフィールド
+    
+    if st.button("PDFを出力"):
+        # PDFをメモリ上で生成
+        pdf_data = save_plots_to_pdf(figlist, selected_eng_name, selected_name)
+        st.success("PDFが生成されました")
+        output_path = st.text_input("保存先のファイル名を入力してください", "output_plots.pdf")
 
-        # 回帰直線の予測値を計算
-        filtered['trendline'] = results.predict(X)
 
-        # 時系列グラフをプロット
-        fig = px.line(filtered, x='date', y='Result', markers=True,
-                    title=f"{selected_name} の {selected_test} の推移",
-                    labels={"date": "日付", "Result": "結果"})
-
-        # 回帰直線を追加（オレンジ色の点線）
-        fig.add_scatter(x=filtered['date'], y=filtered['trendline'], mode='lines', name='回帰直線', line=dict(color='orange', dash='dot'))
+        # PDFをダウンロードボタンで提供
+        st.download_button(
+            label="PDFをダウンロード",
+            data=pdf_data,
+            file_name=output_path,
+            mime="application/pdf"
+        )
 
 
-        st.plotly_chart(fig, use_container_width=True)
-            
+
+        
 
 with tab2:
     st.header("ID入力")
