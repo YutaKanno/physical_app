@@ -222,12 +222,12 @@ with tab1:
 
             fig = px.line(
                 filtered, x='date', y='Result', markers=True,
-                title=f"{selected_name} の {additional_test} の推移",
-                labels={"date": "日付", "Result": "結果"}
+                title=additional_test,
+                labels={"date": "date", "Result": "Result"}
             )
             fig.add_scatter(
                 x=filtered['date'], y=filtered['trendline'],
-                mode='lines', name='回帰直線',
+                mode='lines', name='',
                 line=dict(color='orange', dash='dot')
             )
 
