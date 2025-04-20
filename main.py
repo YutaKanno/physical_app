@@ -44,6 +44,7 @@ def get_fig_as_image(fig):
     img_bytes = fig.to_image(format="png")  # 画像をバイナリデータで取得
     return BytesIO(img_bytes)  # バイナリデータをBytesIOでラップ
 # 画像サイズ取得
+
 def get_image_dimensions(image_path):
     with Image.open(image_path) as img:
         return img.size  # (width, height)
@@ -52,7 +53,7 @@ def get_image_dimensions(image_path):
 
 def get_first_image_url(name):
     # Google画像検索のURLを作成
-    query = name.replace(' ', '+')
+    query = f"{name.replace(' ', '+')}+野球"
     url = f"https://www.google.com/search?tbm=isch&q={query}"
 
     # User-Agentを偽装しないとブロックされる
